@@ -1,0 +1,3 @@
+[submodule "jsonlab"]
+	path = jsonlab
+	url = https://github.com/KrisKusano/jsonlab

@@ -1,8 +1,35 @@
 %% load dataprotocols.org Tabular Data Package into MATLAB table
 %
-% Kristofer D. Kusano - 6/14/14
+%   [data, meta] = DATAPACKAGE(uri) returns a table(s) that are contained in
+%   the datapackage formatted files contained in the directory or HTTP uri.
+%   A struct with the contents of the `datapackage.json` file is returned as
+%   meta.
+%
+%   Examples:
+%       Load a datapackage from the web:
+%           % Note the trailing '/' is important!
+%           [data, meta] = DATAPACKAGE('http://data.okfn.org/data/core/gdp/');
+%
+%       Load the same datapackage from a local directory:
+%           % trailing '\' is here too!
+%           [data, meta] = DATAPACKAGE('C:\path\to\package\')
+%
+%   See Also: README.md loadjson
+%
+%   LICENSE:
+%     Copyright (C) 2014 Kristofer D. Kusano
+%
+%     This program is free software; you can redistribute it and/or modify
+%     it under the terms of the GNU General Public License as published by
+%     the Free Software Foundation; either version 2 of the License, or
+%     (at your option) any later version.
+% 
+%     This program is distributed in the hope that it will be useful,
+%     but WITHOUT ANY WARRANTY; without even the implied warranty of
+%     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+%     GNU General Public License for more details (LICENSE.txt).
 function [data, meta] = datapackage(uri)
-%%% Load data package and meta data from package%%%
+%% Load data package and meta data from package
 
 % depends on jsonlab library
 mpath = fileparts(mfilename('fullpath'));
@@ -38,7 +65,7 @@ data = get_resources(uri, meta, readfunc);
 end
 
 function s = open_resource(path)
-%%% read a resource to a string from either a URL or local file %%%
+%% read a resource to a string from either a URL or local file
 try
     s = urlread(path);
 catch me
@@ -63,29 +90,53 @@ end
 end
 
 function meta = open_descriptor(uri)
-%%% open the descriptor for the datapackage %%%
+%% open the descriptor for the datapackage
 descriptor_string = open_resource([uri, 'datapackage.json']);
 meta = loadjson(descriptor_string);
 end
 
 function data = get_resources(uri, meta, readfunc)
-%%% open all resources as tables %%%
+%% open all resources as tables
+
+% TODO: use input parser to implement optional read arguments ('ReadVariableNames' 'ReadRowNames' 'Delimiter' 'Format' 'TreatAsEmpty' 'HeaderLines')
+treatasempty = '';
+delimiter = ',';
+headerlines = 1;
+readvarnames = false;
+format_str = '';
+
 data = [];
 if isfield(meta, 'resources') && ~isempty(meta.resources) 
     nr = length(meta.resources);
     data = cell(nr, 1);
     
+    if ~iscell(meta.resources)
+        mr = {meta.resources};
+    else
+        mr = meta.resources;
+    end
+    
     % import each resource
     for i = 1:nr
         % get resource, name
-        r = meta.resources{i};
+        r = mr{i};
         if isfield(r, 'name')
             rname = r.name;
         else
             rname = 'UNKNOWN';
         end
         
+        % resource must have at least one
+        if ~isfield(r, 'data') && ...
+                ~isfield(r, 'path') && ...
+                ~isfield(r, 'url')
+            error('datapackage:ResourceReqFields',...
+                ['Resource number %d does not have a field ''data'', '...
+                 '''path'', or ''url'''], i);
+        end
+        
         % where is the data located?
+        cleanup_temp = false;
         if isfield(r, 'data')
             % inline data
             if isfield(r, 'format')
@@ -103,29 +154,165 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
             error('datapackage:InLineData',...
                 'resource ''%s'' has inline data...need to add to program',...
                 rname) 
-        elseif isfield(r, 'path')
-            % check for local file
-            if exist(fullfile(uri, r.path), 'file')
-                fid = fopen(fullfile(uri, r.path));
-                s = fscanf(fid, '%c');
-                fclose(fid);
+        else
+            % external resource
+            if isfield(r, 'path') && exist(fullfile(uri, r.path), 'file')
+                % check for local file
+                resource_path = fullfile(uri, r.path);
             elseif isfield(r, 'url')
                 % has path, but file not found - get from URL
                 s = urlread(r.url);
+                resource_path = tempname;
+                cleanup_temp = true;
+                fid = fopen(resource_path, 'w');  % save as temp file
+                fprintf(fid, '%s', s);
+                fclose(fid);
             else
                 % TODO: check for uri/r.path combo available on web
                 error('datapackage:ResourcePathNotFound',...
-                    'Could not find path ''%s'' and no URL included',...
-                    r.path);
+                    ['Either local path does not exist or no url for ',...
+                     'resource %d'],...
+                    i);
             end
-        elseif isfield(r, 'url')
-            % download from internet
-            s = urlread(r.url);
         end
         
-        % get the data
-        data{i} = parse_csv_from_string(s, readfunc);
-        % import schema
+        % import schema, look for names/formats
+        vnames = [];
+        formats = [];
+        if isfield(r, 'schema')
+            s = r.schema;
+            if isfield(s, 'fields')
+                f = s.fields;
+                
+                % iterate over all fields
+                nf = length(f);
+                formats = cell(nf, 1);
+                vnames = cell(nf, 1);
+                for j = 1:nf
+                    if isfield(f{j}, 'name')
+                        vnames{j} = f{j}.name;
+                    end
+                    if isfield(f{j}, 'type')
+                        formats{j} = f{j}.type;
+                    end
+                end
+            end
+        end
+        
+        % parse variable names
+        if ~isempty(vnames)
+            vempty = cellfun(@isempty, vnames);
+            vempty_x = strcat('x', cellstr(num2str((1:sum(vempty))')));
+            vnames(vempty) = vempty_x;
+            vnames = cellfun(@genvarname, vnames, 'uni', false);
+        end
+        % check against first line
+        fid = fopen(resource_path, 'r');
+        raw = textscan(fid, '%s', 1,...
+                         'headerlines', headerlines,...
+                         'whitespace', '\n');
+        fclose(fid);
+        nvars = length(find(raw{1}{1} == delimiter)) + 1;
+
+        if ~isempty(vnames) && length(vnames) ~= nvars
+            error('datapackage:NVarsInSchemaDoNotMatch',...
+                  ['Number of variables in schema (%d) does not match ',...
+                   'number of columns in 1st row of data file (%d) ',...
+                   'for resource %d'],...
+                  length(vnames), nvars, i);
+        end
+
+        % parse variable formats
+        isdateformat = false(nvars, 1);
+        isdatetimeformat = false(nvars, 1);
+        if isempty(format_str) && ~isempty(formats)
+            format_str = repmat('%f', 1, nvars);
+            for j = 1:nvars
+                if strcmpi(formats{j}, 'string')
+                    format_str(2*j) = 'q';  % read, preserve double quote
+                elseif strcmpi(formats{j}, 'date')
+                    format_str(2*j) = 'q';
+                    isdateformat(j) = true;
+                elseif strcmpi(formats{j}, 'datetime')
+                    format_str(2*j) = 'q';
+                    isdatetimeformat(j) = true;
+                elseif strcmpi(formats{j}, 'object')
+                    format_str(2*j) = 'q';
+                    warning('''object'' format in resource ''%s''. Converting to string',...
+                        r.name);
+                elseif strcmpi(formats{j}, 'geopoint') || strcmpi(formats{j}, 'geojson')
+                    format_str(2*j) = 'q';
+                    warning('''geopoint'' format in resource ''%s''. Converting to string',...
+                        r.name);
+                elseif strcmpi(formats{j}, 'array')
+                    format_str(2*j) = 'q';
+                    warning('''array'' format in resource ''%s''. Converting to string',...
+                        r.name)
+                end
+            end
+        end
+        
+        % arguments for read functions
+        read_args = {
+                     'delimiter', delimiter,...
+                     'headerlines', headerlines,...
+                     'treatasempty', treatasempty...
+                     }; % common arguments
+        if ~isempty(format_str)
+            read_args = [read_args, {'format', format_str}];
+        end
+        
+        % if no schema, read headers
+        if isempty(vnames)
+            warning(['No variable names found in resource schema %d. '...
+                     'Attempting to read variable names from column heads'],...
+                    i);
+            readvarnames = true;
+            iheaderlines = find(strcmpi(read_args, 'headerlines'));
+            read_args{iheaderlines+1} = 0;
+        end
+        
+        % read the data
+        if strcmp(readfunc, 'table')
+            data{i} = readtable(resource_path,...
+                                'FileType', 'text',...
+                                'ReadVariableNames', readvarnames,...
+                                read_args{:} ...
+                                );
+            if ~isempty(vnames)
+                data{i}.Properties.VariableNames = vnames;
+            end
+        elseif strcmp(readfunc, 'dataset')
+            data{i} = dataset('File', resource_path,...
+                              'readvarnames', readvarnames,...
+                              'VarNames', vnames,...
+                              read_args{:} ...
+                              );
+            if ~isempty(vnames)
+                data{i}.Properties.VarNames = vnames;
+            end
+        else
+            error('datapackage:Invalidreadfunc',...
+                'Invalid ''readfunc'' value');
+        end
+        
+        % clean up
+        if cleanup_temp
+            delete(resource_path);
+        end
+        
+        % convert date formats
+        idate = find(isdateformat | isdatetimeformat);
+        for j = 1:length(idate)
+            try
+                data{i}(:, idate(j)) = datenum(data{i}(:, idate(j)));
+            catch
+                % TODO: make a way for user to input date format
+                warning(['Failed to parse field ''%s'' as a date string. ',...
+                         'Keeping it as a string'],...
+                        vnames{j});
+            end
+        end
     end
     
     % expand if only 1 resource
@@ -134,111 +321,3 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
     end
 end
 end
-
-function t = parse_csv_from_string(s, readfunc)
-%%% a CSV from a string to a MATLAB table %%%
-    % TODO: use input parser to implement optional read arguments ('ReadVariableNames' 'ReadRowNames' 'Delimiter' 'Format' 'TreatAsEmpty' 'HeaderLines')
-    treatAsEmpty = '';
-    delimiter = ',';
-    format = '';
-    
-    % split by lines
-    s = strrep(s, '\r', ''); % remove return carriage
-    lines = regexp(s, '\n', 'split'); % split by lines
-    lines(cellfun(@isempty, lines)) = []; % remove empty lines
-    cells = cellfun(@(x) regexp(x, delimiter, 'split'), lines,...
-        'uni', false); % split each line by ","
-    
-    % check and fix string qualifier (quote)
-    qual = cellfun(@(x) length(regexp(x, '"')) > 1, lines); % lines with quote
-    qlines = lines(qual);
-    nq = length(qlines);
-    qcell = cell(nq, 1);
-    for i = 1:length(qlines)
-        q = regexp(qlines{i}, '"'); % indicies of quote locations
-        assert(mod(length(q), 2) == 0, 'unmatched text qualifier (i.e. ''"'')');
-        
-        % replace all internal "," with char(9) placeholder
-        for j = 1:2:length(q)
-            qlines{i}(q(j):q(j+1)) = strrep(qlines{i}(q(j):q(j+1)),...
-                                            delimiter,...
-                                            char(9));
-        end
-        
-        % now split by ","
-        qcell{i} = regexp(qlines{i}, delimiter, 'split');
-        qcell{i} = cellfun(@(x) strrep(x, char(9), delimiter), qcell{i},...
-            'uni', false); % place commas back in to text
-        qcell{i} = cellfun(@(x) strrep(x, '"', ''), qcell{i},...
-            'uni', false); % remove quotes
-    end
-    cells(qual) = qcell; % replace qualified text
-    
-    cell_len = cellfun(@length, cells); % length of each line
-    if range(cell_len(2:end)) ~= 0
-        error('datapackage:UnevenRows',...
-            'rows in CSV string have uneven ammounts');
-    end
-    
-    % check for column format (using first line)
-    % this is how the MATLAB's table class does it
-    % see:
-    % open(fullfile(matlabroot, 'toolbox', 'matlab', 'datatypes', '@table', 'table.m'))
-    % open(fullfile(matlabroot, 'toolbox', 'matlab', 'datatypes', '@table', 'readTextFile.m'))
-    if isempty(format) && length(cells) > 1
-        ncol = cell_len(2);
-        row1 = cells{2};
-        format = repmat('%f', 1, ncol); % format spec string
-        for i = 1:ncol
-            str = row1{i};
-            num = str2double(str);
-            if isnan(num)
-                % If the result was NaN, figure out why.
-                if isempty(str) || strcmpi(str,'nan') || any(strcmp(str,treatAsEmpty))
-                    % NaN came from a nan string, and empty field, or one of the
-                    % treatAsEmpty strings, treat this column as numeric.  Note that
-                    % because we check str against treatAsEmpty, the latter only works
-                    % on numeric columns.  That is what textscan does.
-                    % TODO: isempty(str) could come from an empty string as well?
-                    format(2*i) = 'f';
-                else
-                    % NaN must have come from a failed conversion, treat this column
-                    % as strings.
-                    format(2*i) = 'q';
-                end
-            else
-                % Otherwise the conversion succeeded, treat this column as numeric.
-                format(2*i) = 'f';
-            end
-        end
-    end
-    format = regexp(format, '%[a-zA-Z]', 'match');  % split into cell
-   
-    % combine and make data table
-    cells_cat = vertcat(cells{2:end}); % data
-    
-    if strcmp(readfunc, 'table')
-        t = cell2table(cells_cat);
-    elseif strcmp(readfunc, 'dataset')
-        t = cell2dataset(cells_cat);
-    else
-        error('datapackage:Invalidreadfunc',...
-            'Invalid ''readfunc'' value');
-    end
-    
-    % add headers to dataset
-    headers = cells{1};
-    if length(headers) == size(cells_cat, 2)
-        if strcmp(readfunc, 'table')
-            vname = 'VariableNames';
-        elseif strcmp(readfunc, 'dataset')
-            vname = 'VarNames';
-        end
-        t.Properties.(vname) = genvarname(headers);
-    else
-        warning('datapackage:HeaderLengthDifferent',...
-            ['header length is not equal to width of data. ',...
-             'Leaving column heads alone.'])
-    end
-end
-    

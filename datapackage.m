@@ -1,9 +1,26 @@
-%% load dataprotocols.org Tabular Data Package into MATLAB table
+%% load dataprotocols.org Tabular Data Package into MATLAB table (or dataset)
 %
 %   [data, meta] = DATAPACKAGE(uri) returns a table(s) that are contained in
 %   the datapackage formatted files contained in the directory or HTTP uri.
 %   A struct with the contents of the `datapackage.json` file is returned as
 %   meta.
+%
+%   [data, meta] = DATAPACKAGE(uri, ...) passes the arguments ... to the 
+%   `readtable` or `dataset` reading functions (e.g. 'headerlines', 'format', 
+%   'ReadVariableNames', etc.)
+%
+%   If no optional functions are passed in, defaults for the `readtable` and 
+%   `dataset` functions are used.
+%
+%   If there are more than one resource file in the datapackage, pass in
+%   optional arguments as cell strings or arrays. For example:
+%       ..., 'format', {'%f%q%f', '%f%f'}
+%       ..., readvarnames, [false, true]
+%
+%   The cell string/array of optional arguments must be the same length as the 
+%   number of resources to be read in. That is, if you specify optional
+%   parameters for one resource, you must specify that parameter for all 
+%   resources.
 %
 %   Examples:
 %       Load a datapackage from the web:
@@ -13,6 +30,20 @@
 %       Load the same datapackage from a local directory:
 %           % trailing '\' is here too!
 %           [data, meta] = DATAPACKAGE('C:\path\to\package\')
+%
+%   Troubleshooting:
+%       A common error is failure to read a numeric field (column) because of
+%       non-numeric characters in the field. The error message will look
+%       something like "Unable to read the entire file.  You may need to 
+%       specify a different format string, delimiter, or number of header
+%       lines." Further, there at the bottom of the error message there will be
+%       a "Caused by:" messaged with "Reading failed at line 170." 
+%       
+%       To fix this read error, specify a 'format' name/value pair to the 
+%       DATAPACAKGE function. The format '%f' is for a numeric (floating point)
+%       field and use '%q' for a text field ('q' makes the textscan function
+%       keep double quoted values together. If you are having trouble, read in
+%       everything as a text field ('%q').
 %
 %   See Also: README.md loadjson
 %
@@ -28,7 +59,7 @@
 %     but WITHOUT ANY WARRANTY; without even the implied warranty of
 %     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 %     GNU General Public License for more details (LICENSE.txt).
-function [data, meta] = datapackage(uri)
+function [data, meta] = datapackage(uri, varargin)
 %% Load data package and meta data from package
 
 % depends on jsonlab library
@@ -61,7 +92,7 @@ end
 meta = open_descriptor(uri);
 
 % read resources
-data = get_resources(uri, meta, readfunc);
+data = get_resources(uri, meta, readfunc, varargin{:});
 end
 
 function s = open_resource(path)
@@ -95,15 +126,31 @@ descriptor_string = open_resource([uri, 'datapackage.json']);
 meta = loadjson(descriptor_string);
 end
 
-function data = get_resources(uri, meta, readfunc)
+function data = get_resources(uri, meta, readfunc, varargin)
 %% open all resources as tables
 
-% TODO: use input parser to implement optional read arguments ('ReadVariableNames' 'ReadRowNames' 'Delimiter' 'Format' 'TreatAsEmpty' 'HeaderLines')
-treatasempty = '';
-delimiter = ',';
-headerlines = 1;
-readvarnames = false;
-format_str = '';
+% parse input
+p = inputParser;
+p.CaseSensitive = false;  % default settings
+p.PartialMatching = true;
+addRequired(p, 'uri', @ischar);  % required args
+addRequired(p, 'meta');
+addRequired(p, 'readfunc', @ischar);
+ischar_or_cellstr = @(x) ischar(x) || iscellstr(x);
+addParameter(p, 'treatasempty', '', ischar_or_cellstr);  % optional args
+addParameter(p, 'delimiter', ',', ischar_or_cellstr);
+addParameter(p, 'headerlines', 1, @isnumeric);
+addParameter(p, 'readvarnames', false, @islogical);
+addParameter(p, 'format', '', ischar_or_cellstr);
+parse(p, uri, meta, readfunc, varargin{:});  % do parse
+
+treatasempty = p.Results.treatasempty;
+delimiter = p.Results.delimiter;
+headerlines = p.Results.headerlines;
+readvarnames = p.Results.readvarnames;
+format_str_input = p.Results.format;
+
+% TODO: check for "primaryKey" in fields hash
 
 data = [];
 if isfield(meta, 'resources') && ~isempty(meta.resources) 
@@ -114,6 +161,42 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
         mr = {meta.resources};
     else
         mr = meta.resources;
+    end
+    
+    % set up multiple read options
+    if nr > 1
+        % if using defaults, repeat
+        usedef = @(x) any(strcmp(p.UsingDefaults, x));
+        if usedef('treatasempty')
+            treatasempty = repmat({treatasempty}, nr, 1);
+        else
+            assert(length(treatasempty) == nr,...
+                '''treatasempty'' option must be same length as resources');
+        end
+        if usedef('delimiter')
+            delimiter = repmat({delimiter}, nr, 1);
+        else
+            assert(length(delimiter) == nr,...
+                '''delimiter'' option must be same length as resources');
+        end
+        if usedef('headerlines')
+            headerlines = repmat(headerlines, nr, 1);
+        else
+            assert(length(headerlines) == nr,...
+                '''headerlines'' option must be same length as resources');
+        end
+        if usedef('readvarnames')
+            readvarnames = repmat(readvarnames, nr, 1);
+        else
+            assert(length(readvarnames) == nr,...
+                '''readvarnames'' option must be same length as resources');
+        end
+        if usedef('format')
+            format_str_input = repmat({format_str_input}, nr, 1);
+        else
+            assert(length(format) == nr,...
+                '''format'' option must be same length as resources');
+        end
     end
     
     % import each resource
@@ -162,7 +245,7 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
             elseif isfield(r, 'url')
                 % has path, but file not found - get from URL
                 s = urlread(r.url);
-                resource_path = tempname;
+                resource_path = [tempname, '.csv'];
                 cleanup_temp = true;
                 fid = fopen(resource_path, 'w');  % save as temp file
                 fprintf(fid, '%s', s);
@@ -176,9 +259,41 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
             end
         end
         
+        % arguments for read functions
+        if iscellstr(delimiter)
+            rdelimiter = delimiter{i};
+        else
+            rdelimiter = delimiter;
+        end
+        
+        if iscellstr(format_str_input)
+            format_str = format_str_input{i};
+        else
+            format_str = format_str_input;
+        end
+        
+        if length(headerlines) > 1
+            rheaderlines = headerlines(i);
+        else
+            rheaderlines = headerlines;
+        end
+        
+        if iscell(treatasempty) && ~iscellstr(treatasempty)
+            rtreatasempty = treatasempty{i};
+        else
+            rtreatasempty = treatasempty;
+        end
+        
+        if length(readvarnames) > 1
+            rreadvarnames = readvarnames(i);
+        else
+            rreadvarnames = readvarnames;
+        end
+        
         % import schema, look for names/formats
         vnames = [];
-        formats = [];
+        fieldtype = [];
+        fieldformat = [];
         if isfield(r, 'schema')
             s = r.schema;
             if isfield(s, 'fields')
@@ -186,14 +301,18 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
                 
                 % iterate over all fields
                 nf = length(f);
-                formats = cell(nf, 1);
                 vnames = cell(nf, 1);
+                fieldtype = cell(nf, 1);
+                fieldformat = cell(nf, 1);
                 for j = 1:nf
                     if isfield(f{j}, 'name')
                         vnames{j} = f{j}.name;
                     end
                     if isfield(f{j}, 'type')
-                        formats{j} = f{j}.type;
+                        fieldtype{j} = f{j}.type;
+                    end
+                    if isfield(f{j}, 'format')
+                        fieldformat{j} = f{j}.format;
                     end
                 end
             end
@@ -209,42 +328,46 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
         % check against first line
         fid = fopen(resource_path, 'r');
         raw = textscan(fid, '%s', 1,...
-                         'headerlines', headerlines,...
+                         'headerlines', rheaderlines,...
                          'whitespace', '\n');
         fclose(fid);
-        nvars = length(find(raw{1}{1} == delimiter)) + 1;
-
-        if ~isempty(vnames) && length(vnames) ~= nvars
-            error('datapackage:NVarsInSchemaDoNotMatch',...
-                  ['Number of variables in schema (%d) does not match ',...
-                   'number of columns in 1st row of data file (%d) ',...
-                   'for resource %d'],...
-                  length(vnames), nvars, i);
+        nvars_line1 = length(find(raw{1}{1} == rdelimiter)) + 1;
+        
+        nvars = nvars_line1;
+        if ~isempty(vnames) && length(vnames) ~= nvars_line1
+            nvars = max(nvars_line1, length(vnames));
+            warning('datapackage:NVarsInSchemaDoNotMatch',...
+                    ['Number of fields in schema (%d) does not match\n',...
+                     'number of fields in 1st row of data file (%d)\n',...
+                     'for resource %d. Using schema fields.\n',...
+                     'You might need to specify a ''format'' option if\n',...
+                     'there is a failure'],...
+                    length(vnames), nvars, i);
         end
-
+        
         % parse variable formats
         isdateformat = false(nvars, 1);
         isdatetimeformat = false(nvars, 1);
-        if isempty(format_str) && ~isempty(formats)
+        if isempty(format_str) && ~isempty(fieldtype)
             format_str = repmat('%f', 1, nvars);
             for j = 1:nvars
-                if strcmpi(formats{j}, 'string')
+                if strcmpi(fieldtype{j}, 'string')
                     format_str(2*j) = 'q';  % read, preserve double quote
-                elseif strcmpi(formats{j}, 'date')
+                elseif strcmpi(fieldtype{j}, 'date')
                     format_str(2*j) = 'q';
                     isdateformat(j) = true;
-                elseif strcmpi(formats{j}, 'datetime')
+                elseif strcmpi(fieldtype{j}, 'datetime')
                     format_str(2*j) = 'q';
                     isdatetimeformat(j) = true;
-                elseif strcmpi(formats{j}, 'object')
+                elseif strcmpi(fieldtype{j}, 'object')
                     format_str(2*j) = 'q';
                     warning('''object'' format in resource ''%s''. Converting to string',...
                         r.name);
-                elseif strcmpi(formats{j}, 'geopoint') || strcmpi(formats{j}, 'geojson')
+                elseif strcmpi(fieldtype{j}, 'geopoint') || strcmpi(fieldtype{j}, 'geojson')
                     format_str(2*j) = 'q';
                     warning('''geopoint'' format in resource ''%s''. Converting to string',...
                         r.name);
-                elseif strcmpi(formats{j}, 'array')
+                elseif strcmpi(fieldtype{j}, 'array')
                     format_str(2*j) = 'q';
                     warning('''array'' format in resource ''%s''. Converting to string',...
                         r.name)
@@ -252,11 +375,10 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
             end
         end
         
-        % arguments for read functions
         read_args = {
-                     'delimiter', delimiter,...
-                     'headerlines', headerlines,...
-                     'treatasempty', treatasempty...
+                     'delimiter', rdelimiter,...
+                     'headerlines', rheaderlines,...
+                     'treatasempty', rtreatasempty...
                      }; % common arguments
         if ~isempty(format_str)
             read_args = [read_args, {'format', format_str}];
@@ -267,7 +389,7 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
             warning(['No variable names found in resource schema %d. '...
                      'Attempting to read variable names from column heads'],...
                     i);
-            readvarnames = true;
+            rreadvarnames = true;
             iheaderlines = find(strcmpi(read_args, 'headerlines'));
             read_args{iheaderlines+1} = 0;
         end
@@ -276,20 +398,24 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
         if strcmp(readfunc, 'table')
             data{i} = readtable(resource_path,...
                                 'FileType', 'text',...
-                                'ReadVariableNames', readvarnames,...
+                                'ReadVariableNames', rreadvarnames,...
                                 read_args{:} ...
                                 );
             if ~isempty(vnames)
                 data{i}.Properties.VariableNames = vnames;
+            else
+                vnames = data{i}.Properties.VariableNames;
             end
         elseif strcmp(readfunc, 'dataset')
             data{i} = dataset('File', resource_path,...
-                              'readvarnames', readvarnames,...
+                              'readvarnames', rreadvarnames,...
                               'VarNames', vnames,...
                               read_args{:} ...
                               );
             if ~isempty(vnames)
                 data{i}.Properties.VarNames = vnames;
+            else
+                vnames = data{i}.Properties.VarNames;
             end
         else
             error('datapackage:Invalidreadfunc',...
@@ -305,12 +431,21 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
         idate = find(isdateformat | isdatetimeformat);
         for j = 1:length(idate)
             try
-                data{i}(:, idate(j)) = datenum(data{i}(:, idate(j)));
+                jdate = data{i}.(vnames{idate(j)});
+                if ~isempty(fieldformat{idate(j)})
+                    % use format, if it exists
+                    jdateformat = fieldformat{idate(j)};
+                    date_number = datenum(jdate, jdateformat);
+                else
+                    % no format, just try it
+                    date_number = datenum(jdate);
+                end
+                data{i}.(vnames{idate(j)}) = date_number;
             catch
                 % TODO: make a way for user to input date format
-                warning(['Failed to parse field ''%s'' as a date string. ',...
-                         'Keeping it as a string'],...
-                        vnames{j});
+                warning(['Failed to parse field ''%s'' as a date string ',...
+                         'in resource %d. Keeping it as a string'],...
+                        vnames{j}, i);
             end
         end
     end

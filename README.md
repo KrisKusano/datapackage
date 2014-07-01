@@ -1,7 +1,7 @@
 # datapackage (MATLAB)
-a MATLAB function to read datapackage formatted data
+a MATLAB function to read data package formatted data
 
-## Datapackage Description
+## Data package Description
 The MATLAB function `datapackage` reads in formatted data that conforms
 to the
 [dataprotocols.org](http://dataprotocols.org/tabular-data-package/)
@@ -44,14 +44,18 @@ Since MATLAB R2013b, the
 ## Limitations
 * In-line data, that is contained in the `datapackage.json` file, is not
   supported. It is not clear if this is even allowed per the standard:
-  > All data files MUST be in CSV format
+> All data files MUST be in CSV format
 * The field (column) attribute types `date` and `datetime` are converted
   to a MATLAB numerical date format using the built-in `datenum` function
   convert a number string. The call to `datenum` has no format string
   specified, so it seems like it is quite likely to give up. In this
   case, the function keeps the date as a string.
+* Quote characters in CSV files other than the double quote (") are not
+  supported. This is because the underlying MATLAB function (`textscan`)
+  has no facility for this.
 
 ## Testing
+### Unit Tests
 Unit tests are contained in the file `./tests/datapackagetest.m`. The
 unit tests use MATLAB's built-in [unit test
 framework](http://www.mathworks.com/help/matlab/matlab-unit-test-framework.html).
@@ -63,6 +67,14 @@ results = runtests('datapackagetest.m');
 If there is minimal printout to the command window, then all tests
 passed.
 
+### Core Data package Testing
+In addition to unit testing, the file `./tests/coredatasetstests.m`
+attempts to load the 19 "core" [data package
+sets](http://data.okfn.org/data). First, all files are read in using
+default settings (no optional name/value pairs). At the time of writing,
+two data packages require additional name/value pairs in order to avoid
+errors.
+
 ## License
 This code is provided under the [GNU General Public License (GPL)
-version 2](https://www.gnu.org/licenses/gpl-2.0.txt). 
+version 2](https://www.gnu.org/licenses/gpl-2.0.txt).

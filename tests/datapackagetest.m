@@ -1,5 +1,10 @@
 function tests = datapackagetest
 %% xUnit tests for datapackage function
+%
+% tests = runtests('datapackagetest.m')
+%
+% Note: requires an internet connection
+%
 % Kristofer D. Kusano - 6/28/14
 tests = functiontests(localfunctions);
 end
@@ -7,7 +12,6 @@ end
 %% setup/teardown
 function setupOnce(testCase)
 % initial setup
-clc
 
 % add (absolute) datapackage dir to path
 tstpath = fileparts(mfilename('fullpath'));
@@ -120,7 +124,7 @@ fclose(fid);
 dlmwrite('data.csv', [1, 2, 3; 4, 5, 6], '-append')
 
 % test
-verifyError(testCase, @() datapackage('./'),...
+verifyWarning(testCase, @() datapackage('./'),...
             'datapackage:NVarsInSchemaDoNotMatch');
 end
 
@@ -156,4 +160,6 @@ end
 verifyEqual(testCase, rmat, [1, 2; 3, 4], 'data contents incorrect')
 end
 
-% TODO: need more complicated examples (on web, etc)
+function testweb(testCase)
+[data, meta] = datapackage('http://data.okfn.org/data/core/gdp/');
+end

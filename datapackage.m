@@ -47,18 +47,30 @@
 %
 %   See Also: README.md loadjson
 %
-%   LICENSE:
-%     Copyright (C) 2014 Kristofer D. Kusano
+%   LICENSE: (BSD-2, "FreeBSD" License)
+%     Copyright (C) 2014, Kristofer D. Kusano (kdkusano@gmail.com)
+%     All rights reserved
 %
-%     This program is free software; you can redistribute it and/or modify
-%     it under the terms of the GNU General Public License as published by
-%     the Free Software Foundation; either version 2 of the License, or
-%     (at your option) any later version.
-% 
-%     This program is distributed in the hope that it will be useful,
-%     but WITHOUT ANY WARRANTY; without even the implied warranty of
-%     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-%     GNU General Public License for more details (LICENSE.txt).
+%     Redistribution and use in source and binary forms, with or without
+%     modification, are permitted provided that the following conditions are met:
+%     
+%     1. Redistributions of source code must retain the above copyright notice, this
+%        list of conditions and the following disclaimer. 
+%     2. Redistributions in binary form must reproduce the above copyright notice,
+%        this list of conditions and the following disclaimer in the documentation
+%        and/or other materials provided with the distribution.
+%     
+%     THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+%     ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+%     WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+%     DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+%     ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+%     (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+%     LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+%     ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+%     (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+%     SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 function [data, meta] = datapackage(uri, varargin)
 %% Load data package and meta data from package
 
@@ -68,8 +80,12 @@ jsonpath = fullfile(mpath, 'jsonlab');
 if exist(jsonpath, 'file')
     addpath(fullfile(mpath, 'jsonlab'));
 else
-    error('datapackage:jsonlabNotFound',...
-        'jsonlab directory %s does not exist', jsonpath);
+    % we are possibly in release version - check for existance of function
+    if exist('loadjson') ~= 2
+        % 'loadjson' does not exists as a function
+        error('datapackage:jsonlabNotFound',...
+            'jsonlab function ''loadjson'' not found...');
+    end
 end
 
 % use table by default, fall back on dataset (statistics toolbox)
@@ -93,7 +109,6 @@ meta = open_descriptor(uri);
 
 % read resources
 data = get_resources(uri, meta, readfunc, varargin{:});
-end
 
 function s = open_resource(path)
 %% read a resource to a string from either a URL or local file
@@ -118,13 +133,12 @@ catch me
         rethrow(me)
     end
 end
-end
 
 function meta = open_descriptor(uri)
 %% open the descriptor for the datapackage
 descriptor_string = open_resource([uri, 'datapackage.json']);
 meta = loadjson(descriptor_string);
-end
+
 
 function data = get_resources(uri, meta, readfunc, varargin)
 %% open all resources as tables
@@ -455,4 +469,7 @@ if isfield(meta, 'resources') && ~isempty(meta.resources)
         data = data{1};
     end
 end
-end
+
+% there MUST be new line(s) at the end of the file
+% `make` appends `loadjson.m` here
+% ---------------------------- END datapackage.m ---------------------------- %
